@@ -835,6 +835,10 @@ void addReply(client *c, robj *obj) {
         char buf[32];
         size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(obj));
         _addReplyToBufferOrList(c, buf, len);
+    } else if (obj->encoding == OBJ_ENCODING_ROARING) {
+        sds s = bitmapRoaringToSds(obj);
+        _addReplyToBufferOrList(c, s, sdslen(s));
+        sdsfree(s);
     } else {
         serverPanic("Wrong obj->encoding in addReply()");
     }
@@ -1531,6 +1535,10 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
+    if (obj->encoding == OBJ_ENCODING_ROARING) {
+        addReplyBulkSds(c, bitmapRoaringToSds(obj));
+        return;
+    }
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */

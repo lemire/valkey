@@ -1630,6 +1630,13 @@ robj *createHLLObject(void) {
     return o;
 }
 
+/* HyperLogLog commands work on the bytes of the string: a Roaring-encoded
+ * string (see bitmap_roaring.c) is converted to the plain encoding first. */
+static robj *hllLookupDecoded(client *c, robj *key, robj *o) {
+    if (o && o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_ROARING) o = dbUnshareStringValue(c->db, key, o);
+    return o;
+}
+
 /* Check if the object is a String with a valid HLL representation.
  * Return C_OK if this is true, otherwise reply to the client
  * with an error and return C_ERR. */
@@ -1662,7 +1669,7 @@ invalid:
 
 /* PFADD var ele ele ... ele => :0 or :1 */
 void pfaddCommand(client *c) {
-    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    robj *o = hllLookupDecoded(c, c->argv[1], lookupKeyWrite(c->db, c->argv[1]));
     struct hllhdr *hdr;
     int updated = 0, j;
 
@@ -1716,7 +1723,7 @@ void pfcountCommand(client *c) {
         registers = max + HLL_HDR_SIZE;
         for (j = 1; j < c->argc; j++) {
             /* Check type and size. */
-            robj *o = lookupKeyRead(c->db, c->argv[j]);
+            robj *o = hllLookupDecoded(c, c->argv[j], lookupKeyRead(c->db, c->argv[j]));
             if (o == NULL) continue; /* Assume empty HLL for nonexistent var.*/
             if (isHLLObjectOrReply(c, o) != C_OK) return;
 
@@ -1744,7 +1751,7 @@ void pfcountCommand(client *c) {
      * logically expired key on a replica is deleted, while with lookupKeyRead
      * it isn't, but the lookup returns NULL either way if the key is logically
      * expired, which is what matters here. */
-    o = lookupKeyRead(c->db, c->argv[1]);
+    o = hllLookupDecoded(c, c->argv[1], lookupKeyRead(c->db, c->argv[1]));
     if (o == NULL) {
         /* No key? Cardinality is zero since no element was added, otherwise
          * we would have a key as HLLADD creates it as a side effect. */
@@ -1804,7 +1811,7 @@ void pfmergeCommand(client *c) {
     memset(max, 0, sizeof(max));
     for (j = 1; j < c->argc; j++) {
         /* Check type and size. */
-        robj *o = lookupKeyRead(c->db, c->argv[j]);
+        robj *o = hllLookupDecoded(c, c->argv[j], lookupKeyRead(c->db, c->argv[j]));
         if (o == NULL) continue; /* Assume empty HLL for nonexistent var. */
         if (isHLLObjectOrReply(c, o) != C_OK) return;
 
@@ -1822,7 +1829,7 @@ void pfmergeCommand(client *c) {
     }
 
     /* Create / unshare the destination key's value if needed. */
-    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    robj *o = hllLookupDecoded(c, c->argv[1], lookupKeyWrite(c->db, c->argv[1]));
     if (o == NULL) {
         /* Create the key with a string value of the exact length to
          * hold our HLL data structure. sdsnewlen() when NULL is passed
@@ -2009,7 +2016,7 @@ void pfdebugCommand(client *c) {
         return;
     }
 
-    o = lookupKeyWrite(c->db, c->argv[2]);
+    o = hllLookupDecoded(c, c->argv[2], lookupKeyWrite(c->db, c->argv[2]));
     if (o == NULL) {
         addReplyError(c, "The specified key does not exist");
         return;

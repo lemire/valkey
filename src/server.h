@@ -37,6 +37,7 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "bitmap_roaring.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -839,6 +840,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
 #define OBJ_ENCODING_LISTPACK2 12 /* Encoded as a listpack with metadata tag */
 #define OBJ_ENCODING_PATH_HASH 13 /* Path hash backed by a radix tree */
+#define OBJ_ENCODING_ROARING 14   /* String holding a bitmap, as a Roaring bitmap */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -2485,6 +2487,8 @@ struct valkeyServer {
     int lazyfree_lazy_server_del;
     int lazyfree_lazy_user_del;
     int lazyfree_lazy_user_flush;
+    /* Bitmaps */
+    int bitmap_roaring_enabled; /* Store bitmaps written by bit commands as Roaring bitmaps. */
     /* Latency monitor */
     long long latency_monitor_threshold;
     dict *latency_events;

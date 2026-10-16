@@ -210,12 +210,16 @@ tags "modules" {
             r setex volatile-key 10000 x
             # We use SETBIT here, so we can set a big key and get the used_memory
             # bigger than maxmemory. Next command will evict volatile keys. We
-            # can't use SET, as SET uses big input buffer, so it will fail.
+            # can't use SET, as SET uses big input buffer, so it will fail. The
+            # plain encoding allocates the whole bitmap.
+            set old_roaring [lindex [r config get bitmap-roaring-enabled] 1]
+            r config set bitmap-roaring-enabled no
             r setbit big-key 1600000 0 ;# this will consume 200kb
             r getbit big-key 0
             assert_equal {x evicted} [r hooks.is_key_removed volatile-key]
             r config set maxmemory-policy $old_policy
             r config set maxmemory 0
+            r config set bitmap-roaring-enabled $old_roaring
         } {OK} {needs:debug}
 
         test {Test flushdb hooks} {

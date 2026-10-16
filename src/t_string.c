@@ -468,6 +468,21 @@ void getsetCommand(client *c) {
     rewriteClientCommandArgument(c, 0, shared.set);
 }
 
+/* Writes the 'len' bytes at 'p' at 'offset' in 'o', the string at 'key', if 'o'
+ * is Roaring-encoded and the result still fits the encoding, and returns the
+ * unshared string. Otherwise returns NULL without writing. */
+static robj *writeRoaringStringValue(serverDb *db, robj *key, robj *o, size_t offset, const char *p, size_t len) {
+    if (o->encoding != OBJ_ENCODING_ROARING || offset + len > BITMAP_ROARING_MAX_BYTES) return NULL;
+    if (o->refcount != 1) {
+        robj *r = bitmapRoaringDupObject(o);
+        dbReplaceValue(db, key, &r);
+        o = r;
+    }
+    bitmapRoaringGrow(o, offset + len);
+    bitmapRoaringWriteBytes(o, offset, len, (const unsigned char *)p);
+    return o;
+}
+
 void setrangeCommand(client *c) {
     robj *o;
     long offset;
@@ -513,6 +528,16 @@ void setrangeCommand(client *c) {
         if (checkStringLength(c, offset, sdslen(value)) != C_OK)
             return;
 
+        /* A Roaring-encoded string keeps its encoding while its bits fit. */
+        robj *r = writeRoaringStringValue(c->db, c->argv[1], o, offset, value, sdslen(value));
+        if (r != NULL) {
+            signalModifiedKey(c, c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_STRING, "setrange", c->argv[1], c->db->id);
+            server.dirty++;
+            addReplyLongLong(c, bitmapRoaringLen(r));
+            return;
+        }
+
         /* Create a copy when the object is shared or encoded. */
         o = dbUnshareStringValue(c->db, c->argv[1], o);
     }
@@ -541,6 +566,9 @@ void getrangeCommand(client *c) {
     if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         str = llbuf;
         strlen = ll2string(llbuf, sizeof(llbuf), (long)objectGetVal(o));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+        str = NULL;
+        strlen = bitmapRoaringLen(o);
     } else {
         str = objectGetVal(o);
         strlen = sdslen(str);
@@ -561,6 +589,8 @@ void getrangeCommand(client *c) {
      * nothing can be returned is: start > end. */
     if (start > end || strlen == 0) {
         addReply(c, shared.emptybulk);
+    } else if (str == NULL) {
+        addReplyBulkSds(c, bitmapRoaringGetRange(o, start, end - start + 1));
     } else {
         addReplyBulkCBuffer(c, (char *)str + start, end - start + 1);
     }
@@ -1023,6 +1053,17 @@ void appendCommand(client *c) {
         append = c->argv[2];
         if (checkStringLength(c, stringObjectLen(o), sdslen(objectGetVal(append))) != C_OK)
             return;
+
+        /* A Roaring-encoded string keeps its encoding while its bits fit. */
+        robj *r = writeRoaringStringValue(c->db, c->argv[1], o, stringObjectLen(o), objectGetVal(append),
+                                          sdslen(objectGetVal(append)));
+        if (r != NULL) {
+            signalModifiedKey(c, c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
+            server.dirty++;
+            addReplyLongLong(c, bitmapRoaringLen(r));
+            return;
+        }
 
         /* Append the value */
         o = dbUnshareStringValue(c->db, c->argv[1], o);

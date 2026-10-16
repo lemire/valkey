@@ -619,6 +619,7 @@ robj *dupStringObject(const robj *o) {
         d->encoding = OBJ_ENCODING_INT;
         d->val_ptr = o->val_ptr;
         return d;
+    case OBJ_ENCODING_ROARING: return bitmapRoaringDupObject(o);
     default: serverPanic("Wrong encoding."); break;
     }
 }
@@ -700,6 +701,8 @@ robj *createModuleObject(moduleType *mt, void *value) {
 void freeStringObject(robj *o) {
     if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
         sdsfree(objectGetVal(o));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+        bitmapRoaringFreeObject(o);
     }
 }
 
@@ -1079,6 +1082,8 @@ robj *getDecodedObject(robj *o) {
         ll2string(buf, 32, (long)objectGetVal(o));
         dec = createStringObject(buf, strlen(buf));
         return dec;
+    } else if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+        return createObject(OBJ_STRING, bitmapRoaringToSds(o));
     } else {
         serverPanic("Unknown encoding type");
     }
@@ -1101,6 +1106,13 @@ int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
     size_t alen, blen, minlen;
 
     if (a == b) return 0;
+    if (a->encoding == OBJ_ENCODING_ROARING || b->encoding == OBJ_ENCODING_ROARING) {
+        robj *da = getDecodedObject((robj *)a), *db = getDecodedObject((robj *)b);
+        int cmp = compareStringObjectsWithFlags(da, db, flags);
+        decrRefCount(da);
+        decrRefCount(db);
+        return cmp;
+    }
     if (sdsEncodedObject(a)) {
         astr = objectGetVal(a);
         alen = sdslen(astr);
@@ -1148,7 +1160,7 @@ int equalStringObjects(robj *a, robj *b) {
         return objectGetVal(a) == objectGetVal(b);
     } else if (a->encoding != OBJ_ENCODING_INT &&
                b->encoding != OBJ_ENCODING_INT &&
-               sdslen(objectGetVal(a)) != sdslen(objectGetVal(b))) {
+               stringObjectLen(a) != stringObjectLen(b)) {
         return 0;
     } else {
         return compareStringObjects(a, b) == 0;
@@ -1159,6 +1171,8 @@ size_t stringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
     if (sdsEncodedObject(o)) {
         return sdslen(objectGetVal(o));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+        return bitmapRoaringLen(o);
     } else {
         return sdigits10((long)objectGetVal(o));
     }
@@ -1175,6 +1189,13 @@ int getDoubleFromObject(const robj *o, double *target) {
             if (!string2d(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
         } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
             value = (long)objectGetVal(o);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+            /* No number has thousands of characters. */
+            if (bitmapRoaringLen(o) > MAX_LONG_DOUBLE_CHARS) return C_ERR;
+            robj *decoded = getDecodedObject((robj *)o);
+            int ret = getDoubleFromObject(decoded, target);
+            decrRefCount(decoded);
+            return ret;
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -1208,6 +1229,13 @@ int getLongDoubleFromObject(robj *o, long double *target) {
             if (!string2ld(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
         } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
             value = (long)objectGetVal(o);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+            /* No number has thousands of characters. */
+            if (bitmapRoaringLen(o) > MAX_LONG_DOUBLE_CHARS) return C_ERR;
+            robj *decoded = getDecodedObject((robj *)o);
+            int ret = getLongDoubleFromObject(decoded, target);
+            decrRefCount(decoded);
+            return ret;
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -1241,6 +1269,13 @@ int getLongLongFromObject(robj *o, long long *target) {
             if (string2ll(objectGetVal(o), sdslen(objectGetVal(o)), &value) == 0) return C_ERR;
         } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
             value = (long)objectGetVal(o);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+            /* No number has thousands of characters. */
+            if (bitmapRoaringLen(o) > MAX_LONG_DOUBLE_CHARS) return C_ERR;
+            robj *decoded = getDecodedObject((robj *)o);
+            int ret = getLongLongFromObject(decoded, target);
+            decrRefCount(decoded);
+            return ret;
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -1321,6 +1356,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     case OBJ_ENCODING_PATH_HASH: return "pathhash";
+    case OBJ_ENCODING_ROARING: return "roaring";
     default: return "unknown";
     }
 }
@@ -1340,6 +1376,8 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     if (objectGetType(o) == OBJ_STRING) {
         if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
             asize += sdsAllocSize(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_ROARING) {
+            asize += bitmapRoaringAllocSize(o);
         } else if (objectGetEncoding(o) != OBJ_ENCODING_INT && objectGetEncoding(o) != OBJ_ENCODING_EMBSTR) {
             serverPanic("Unknown string encoding");
         }

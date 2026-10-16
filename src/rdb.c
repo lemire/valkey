@@ -595,6 +595,12 @@ ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
      * object is already integer encoded. */
     if (obj->encoding == OBJ_ENCODING_INT) {
         return rdbSaveLongLongAsStringObject(rdb, (long)objectGetVal(obj));
+    } else if (obj->encoding == OBJ_ENCODING_ROARING) {
+        /* Saved as a plain string: the file stays readable by any version. */
+        sds s = bitmapRoaringToSds(obj);
+        ssize_t n = rdbSaveRawString(rdb, (unsigned char *)s, sdslen(s));
+        sdsfree(s);
+        return n;
     } else {
         serverAssertWithInfo(NULL, obj, sdsEncodedObject(obj));
         return rdbSaveRawString(rdb, objectGetVal(obj), sdslen(objectGetVal(obj)));

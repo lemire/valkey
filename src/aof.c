@@ -1921,6 +1921,11 @@ int rioWriteBulkObject(rio *r, robj *obj) {
         return rioWriteBulkLongLong(r, (long)objectGetVal(obj));
     } else if (sdsEncodedObject(obj)) {
         return rioWriteBulkString(r, objectGetVal(obj), sdslen(objectGetVal(obj)));
+    } else if (obj->encoding == OBJ_ENCODING_ROARING) {
+        sds s = bitmapRoaringToSds(obj);
+        int ret = rioWriteBulkString(r, s, sdslen(s));
+        sdsfree(s);
+        return ret;
     } else {
         serverPanic("Unknown string encoding");
     }

@@ -814,7 +814,7 @@ static dbEntry *tryCloneDbEntry(dbEntry *de) {
 
     /* Future optimization: Incorporate small ziplists, sorted sets, etc.
      * OBJ_ENCODING_INT is omitted only because there isn't a good API for cloning it yet. */
-    if (de->type == OBJ_STRING && de->encoding != OBJ_ENCODING_INT) {
+    if (de->type == OBJ_STRING && (de->encoding == OBJ_ENCODING_RAW || de->encoding == OBJ_ENCODING_EMBSTR)) {
         ssize_t itemSize = computeStringDbEntrySize(de);
 
         if (itemSize <= bgiter_max_clone_item_bytes) {

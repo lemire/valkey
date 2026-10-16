@@ -483,7 +483,16 @@ void sortCommandGeneric(client *c, int readonly) {
             if (alpha) {
                 if (sortby) vector[j].u.cmpobj = getDecodedObject(byval);
             } else {
-                if (sdsEncodedObject(byval)) {
+                if (byval->encoding == OBJ_ENCODING_ROARING) {
+                    sds s = bitmapRoaringToSds(byval);
+                    char *eptr;
+                    errno = 0;
+                    vector[j].u.score = valkey_strtod_sds(s, &eptr);
+                    if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
+                        int_conversion_error = 1;
+                    }
+                    sdsfree(s);
+                } else if (sdsEncodedObject(byval)) {
                     char *eptr;
                     errno = 0;
                     vector[j].u.score = valkey_strtod_sds(objectGetVal(byval), &eptr);
