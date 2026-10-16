@@ -6,6 +6,7 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **LZ4** is the v1.10.0 streaming compression library.
+* **CRoaring** is the C implementation of Roaring bitmaps, used to encode bitmaps (see `bitmap-roaring-enabled`).
 * **hdr_histogram** Used for per-command latency tracking histograms.
 * **ffc.h** is a C99 port of the fast_float library, used as a replacement for strtod to convert strings to floats efficiently.
 * **gtest-parallel** is a script for running googletest tests in parallel.
@@ -82,6 +83,24 @@ To upgrade LZ4:
    `XXH_NAMESPACE` definition.
 4. Verify that the `LZ4_VERSION_*` macros in `lz4.h` match the imported release
    and update the version in the dependency summary above.
+
+CRoaring
+--------
+
+CRoaring is imported as the single-file amalgamation (`roaring.c` and
+`roaring.h`) published with each release of
+https://github.com/RoaringBitmap/CRoaring. The vendored version is defined by
+the `ROARING_VERSION` macro in `roaring.h`. `Makefile` and `CMakeLists.txt` are
+maintained locally for the Valkey build, which hides the CRoaring symbols to
+avoid conflicts with modules loaded by Valkey.
+
+To upgrade CRoaring:
+
+1. Download `roaring.c` and `roaring.h` from the assets of the release
+   (https://github.com/RoaringBitmap/CRoaring/releases) and replace the
+   vendored files with them.
+2. Replace `LICENSE` with the one of the release, if it changed.
+3. Preserve the local `Makefile` and `CMakeLists.txt`.
 
 Lua
 ---
