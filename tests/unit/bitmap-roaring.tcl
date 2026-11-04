@@ -319,6 +319,103 @@ start_server {tags {"bitops roaring"}} {
         r del k
     }
 
+    # The portable format: a cookie (12346, no run containers), the number of
+    # containers, then for each its key and cardinality minus one, then for
+    # each its offset, then the containers (here, sorted arrays of 16-bit
+    # values). Everything is little endian.
+    proc roaring_array_payload {key values} {
+        set n [llength $values]
+        return [binary format iissi 12346 1 $key [expr {$n - 1}] 16][binary format s* $values]
+    }
+
+    test {Roaring: R.EXPORT writes the portable format, from either encoding} {
+        foreach enabled {no yes} {
+            r config set bitmap-roaring-enabled $enabled
+            r del k
+            foreach bit {9 1 5} { r setbit k $bit 1 }
+            assert_encoding [expr {$enabled ? "roaring" : "raw"}] k
+            assert_equal [roaring_array_payload 0 {1 5 9}] [r r.export k]
+        }
+        # A string encoded as an integer exports the bits of its digits.
+        r config set bitmap-roaring-enabled no
+        r set k 12345
+        assert_encoding int k
+        r set plain x
+        r setrange plain 0 12345
+        assert_encoding raw plain
+        assert_equal [r r.export plain] [r r.export k]
+        # Strings without set bits export the empty bitmap.
+        r set k ""
+        assert_equal [binary format ii 12346 0] [r r.export k]
+        r set k [string repeat "\x00" 100]
+        assert_equal [binary format ii 12346 0] [r r.export k]
+        assert_equal {} [r r.export nosuchkey]
+    }
+
+    test {Roaring: R.IMPORT reads the portable format} {
+        r config set bitmap-roaring-enabled no
+        r del k
+        r rpush k a
+        r expire k 1000
+        # Like SET, it replaces any value and its time to live.
+        assert_equal OK [r r.import k [roaring_array_payload 1 {3 7}]]
+        assert_encoding roaring k
+        assert_equal -1 [r ttl k]
+        # Values 65539 and 65543: the string ends with the byte of the last.
+        assert_equal 8193 [r strlen k]
+        assert_equal 2 [r bitcount k]
+        assert_equal 65539 [r bitpos k 1]
+        assert_equal {1 0 1} [list [r getbit k 65539] [r getbit k 65540] [r getbit k 65543]]
+        # It exports the same bytes.
+        assert_equal [roaring_array_payload 1 {3 7}] [r r.export k]
+        # The empty bitmap gives an empty string.
+        assert_equal OK [r r.import k [binary format ii 12346 0]]
+        assert_equal {1 0} [list [r exists k] [r strlen k]]
+    }
+
+    test {Roaring: R.EXPORT and R.IMPORT round trip} {
+        foreach enabled {no yes} {
+            r config set bitmap-roaring-enabled $enabled
+            r del k copy
+            for {set i 0} {$i < 2000} {incr i} {
+                r setbit k [expr {int(rand() * 3000000)}] 1
+            }
+            # A full chunk and a run, for run containers.
+            r setrange k 100000 [string repeat "\xff" 9000]
+            # The last byte holds a set bit, so the lengths are the same.
+            r setbit k 3000000 1
+            r r.import copy [r r.export k]
+            assert_equal [r get k] [r get copy]
+            assert_equal [r r.export k] [r r.export copy]
+        }
+    }
+
+    test {Roaring: R.IMPORT rejects invalid payloads} {
+        r del k
+        set good [roaring_array_payload 0 {1 5 9}]
+        foreach bad [list "" garbage [string range $good 0 end-1] "${good}x" [roaring_array_payload 0 {5 1 9}]] {
+            assert_error {*invalid Roaring bitmap payload*} {r r.import k $bad}
+        }
+        assert_equal 0 [r exists k]
+        r rpush list a
+        assert_error {*WRONGTYPE*} {r r.export list}
+        r del list
+    }
+
+    test {Roaring: R.IMPORT respects proto-max-bulk-len} {
+        set last [roaring_array_payload 65535 {65535}]
+        set old [lindex [r config get proto-max-bulk-len] 1]
+        r config set proto-max-bulk-len 1048576
+        assert_error {*proto-max-bulk-len*} {r r.import k $last}
+        r config set proto-max-bulk-len $old
+        if {$old >= (1 << 29)} {
+            assert_equal OK [r r.import k $last]
+            assert_equal [expr {1 << 29}] [r strlen k]
+            assert_equal 1 [r getbit k [expr {(1 << 32) - 1}]]
+        }
+        r del k
+    }
+
     test {Roaring: random commands match the plain encoding} {
         r del plain roar
         for {set i 0} {$i < 3000} {incr i} {
@@ -356,6 +453,7 @@ start_server {tags {"bitops roaring repl external:skip"}} {
                 $primary setbit k [expr {int(rand() * 1000000)}] 1
             }
             $primary bitop not k2 k
+            $primary r.import k3 [$primary r.export k]
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary object encoding k] roaring
             assert_equal [$replica object encoding k] raw

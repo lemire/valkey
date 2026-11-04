@@ -42,6 +42,10 @@ long long bitmapRoaringFirst(const struct serverObject *o, int bit, uint64_t fir
 void bitmapRoaringReadBytes(const struct serverObject *o, size_t start, size_t count, unsigned char *dst);
 void bitmapRoaringWriteBytes(struct serverObject *o, size_t start, size_t count, const unsigned char *src);
 
+/* Portable serialization format of Roaring bitmaps (R.EXPORT, R.IMPORT). */
+sds bitmapRoaringExport(struct serverObject *o);
+struct serverObject *bitmapRoaringImport(const char *payload, size_t len);
+
 /* The same values as in bitops.c. */
 #define BITOP_AND 0
 #define BITOP_OR 1

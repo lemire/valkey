@@ -453,6 +453,58 @@ void bitmapRoaringWriteBytes(robj *o, size_t start, size_t count, const unsigned
     zfree(buf);
 }
 
+/* ------------------------ Portable serialization -------------------------- */
+
+/* Returns the bits of the string 'o' (any encoding) in the portable
+ * serialization format of Roaring bitmaps, which other Roaring libraries
+ * read. The length of the string is not part of it. Returns NULL if the
+ * string has bits past 2^32 - 1, which the format cannot hold. */
+sds bitmapRoaringExport(robj *o) {
+    serverAssert(o->type == OBJ_STRING);
+    roaring_bitmap_t *owned = NULL;
+    const roaring_bitmap_t *rb;
+    if (o->encoding == OBJ_ENCODING_ROARING) {
+        rb = getBitmap(o)->rb;
+    } else {
+        if (stringObjectLen(o) > BITMAP_ROARING_MAX_BYTES) return NULL;
+        robj *decoded = getDecodedObject(o);
+        sds s = objectGetVal(decoded);
+        owned = roaringFromBytes((unsigned char *)s, sdslen(s), 0);
+        decrRefCount(decoded);
+        rb = owned;
+    }
+    size_t size = roaring_bitmap_portable_size_in_bytes(rb);
+    sds payload = sdsnewlen(SDS_NOINIT, size);
+    size_t written = roaring_bitmap_portable_serialize(rb, payload);
+    serverAssert(written == size);
+    if (owned) roaring_bitmap_free(owned);
+    return payload;
+}
+
+/* Returns a string holding the bits of 'payload', a Roaring bitmap in the
+ * portable serialization format, or NULL if the payload is not exactly one
+ * valid bitmap. The string is just long enough to hold the largest value, so
+ * an empty bitmap gives an empty string (with the plain encoding). */
+robj *bitmapRoaringImport(const char *payload, size_t len) {
+    /* The payload comes from a client: the safe deserialization does not read
+     * past its end, and validation checks the containers it builds. */
+    if (len == 0 || roaring_bitmap_portable_deserialize_size(payload, len) != len) return NULL;
+    roaring_bitmap_t *rb = roaring_bitmap_portable_deserialize_safe(payload, len);
+    if (rb == NULL) return NULL;
+    if (!roaring_bitmap_internal_validate(rb, NULL)) {
+        roaring_bitmap_free(rb);
+        return NULL;
+    }
+    if (roaring_bitmap_is_empty(rb)) {
+        roaring_bitmap_free(rb);
+        return createStringObject("", 0);
+    }
+    roaring_bitmap_run_optimize(rb);
+    roaring_bitmap_shrink_to_fit(rb);
+    size_t bytes = (size_t)(roaring_bitmap_maximum(rb) / 8) + 1;
+    return createObjectFromRoaring(rb, bytes);
+}
+
 /* ------------------------------- BITOP ----------------------------------- */
 
 static roaring_bitmap_t *orOrXor(int op, const roaring_bitmap_t *a, const roaring_bitmap_t *b) {

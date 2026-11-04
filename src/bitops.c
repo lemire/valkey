@@ -1544,3 +1544,50 @@ void bitfieldCommand(client *c) {
 void bitfieldroCommand(client *c) {
     bitfieldGeneric(c, BITFIELD_FLAG_READONLY);
 }
+
+/* R.EXPORT key
+ *
+ * Returns the bits of the string in the portable serialization format of
+ * Roaring bitmaps (https://github.com/RoaringBitmap/RoaringFormatSpec), read
+ * by the Roaring libraries of most languages. Works with any string,
+ * whatever its encoding. The length of the string is not exported. */
+void rexportCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (o == NULL) {
+        addReplyNull(c);
+        return;
+    }
+    if (checkType(c, o, OBJ_STRING)) return;
+    sds payload = bitmapRoaringExport(o);
+    if (payload == NULL) {
+        addReplyError(c, "string is too long for a Roaring bitmap: it has bits past 2^32 - 1");
+        return;
+    }
+    addReplyBulkSds(c, payload);
+}
+
+/* R.IMPORT key payload
+ *
+ * Stores at 'key' the string whose set bits are those of 'payload', a Roaring
+ * bitmap in the portable serialization format. Like SET, it replaces any
+ * value and its time to live. The string is just long enough to hold the
+ * largest value, and it has the Roaring encoding. */
+void rimportCommand(client *c) {
+    robj *payload = c->argv[2];
+    serverAssert(sdsEncodedObject(payload));
+    robj *o = bitmapRoaringImport(objectGetVal(payload), sdslen(objectGetVal(payload)));
+    if (o == NULL) {
+        addReplyError(c, "invalid Roaring bitmap payload");
+        return;
+    }
+    /* SETBIT cannot make a string longer than proto-max-bulk-len either. */
+    if (!mustObeyClient(c) && stringObjectLen(o) > (size_t)server.proto_max_bulk_len) {
+        decrRefCount(o);
+        addReplyError(c, "string exceeds maximum allowed size (proto-max-bulk-len)");
+        return;
+    }
+    setKey(c, c->db, c->argv[1], &o, 0);
+    notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
+    server.dirty++;
+    addReply(c, shared.ok);
+}
