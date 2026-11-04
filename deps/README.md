@@ -88,19 +88,33 @@ CRoaring
 --------
 
 CRoaring is imported as the single-file amalgamation (`roaring.c` and
-`roaring.h`) published with each release of
-https://github.com/RoaringBitmap/CRoaring. The vendored version is defined by
-the `ROARING_VERSION` macro in `roaring.h`. `Makefile` and `CMakeLists.txt` are
-maintained locally for the Valkey build, which hides the CRoaring symbols to
-avoid conflicts with modules loaded by Valkey.
+`roaring.h`) of https://github.com/RoaringBitmap/CRoaring, unchanged.
+`Makefile` and `CMakeLists.txt` are maintained locally for the Valkey build,
+which hides the CRoaring symbols to avoid conflicts with modules loaded by
+Valkey.
 
-To upgrade CRoaring:
+The vendored copy is built from commit
+`b4cc0c48cd608addf91cf1595b2f268d9b2d2e66` (the merge of
+RoaringBitmap/CRoaring#961, after release 5.5.5), so `ROARING_VERSION` in
+`roaring.h` still reads 5.5.5. Once a release includes that commit, prefer the
+release files.
+
+To upgrade CRoaring to a release:
 
 1. Download `roaring.c` and `roaring.h` from the assets of the release
    (https://github.com/RoaringBitmap/CRoaring/releases) and replace the
    vendored files with them.
 2. Replace `LICENSE` with the one of the release, if it changed.
 3. Preserve the local `Makefile` and `CMakeLists.txt`.
+
+To build the files from a commit instead, run the amalgamation script of
+CRoaring at that commit in an empty directory, in the C locale (the order of
+the source files depends on it):
+
+    LC_ALL=C bash /path/to/CRoaring/amalgamation.sh
+
+At a release tag, this gives the release files, but for the timestamp in their
+first lines.
 
 Lua
 ---
